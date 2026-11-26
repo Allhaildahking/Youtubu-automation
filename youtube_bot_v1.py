@@ -27,16 +27,19 @@ from pathlib import Path
 import requests
 import schedule
 import pytz
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ══════════════════════════════════════════════════════════════
 #  CONFIGURATION
 # ══════════════════════════════════════════════════════════════
 
 # ── API Keys ─────────────────────────────────────────────────
-GEMINI_API_KEY     = "AIzaSyBWCdATH1xi7RIBcBnf4MAzUakcc604uiQ"
-GROQ_API_KEY       = "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"
-TELEGRAM_BOT_TOKEN = "8761177135:AAHxzhJ3czzoHLaFArl0CTq9RwI6bWk_3Qs"
-TELEGRAM_CHAT_ID   = "-1003656979711"
+GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── YouTube Auth ──────────────────────────────────────────────
 YOUTUBE_CLIENT_SECRETS = "client_secrets.json"
@@ -47,14 +50,14 @@ YOUTUBE_SCOPES         = [
 ]
 
 # ── Image Generation ──────────────────────────────────────────
-CLOUDFLARE_ACCOUNT_ID = ""      # Fill in when ready
-CLOUDFLARE_API_TOKEN  = ""      # Fill in when ready
-AI_HORDE_API_KEY      = "0000000000"  # Anonymous - works without signup
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN  = os.getenv("CLOUDFLARE_API_TOKEN", "")
+AI_HORDE_API_KEY      = os.getenv("AI_HORDE_API_KEY", "")
 
 # ── Video Settings ────────────────────────────────────────────
 VIDEO_FPS             = 30
 ZOOM_SPEED            = 0.0005
-SUBTITLE_FONT_SIZE    = 48
+SUBTITLE_FONT_SIZE    = 32
 IMAGE_WIDTH           = 576
 IMAGE_HEIGHT          = 1024   # 9:16 vertical
 
@@ -62,7 +65,7 @@ IMAGE_HEIGHT          = 1024   # 9:16 vertical
 CHANNELS = {
     "past_shock": {
         "name": "Past Shock",
-        "youtube_channel_id": "",          # Add your Past Shock channel ID
+        "youtube_channel_id": "UC28gIjDiNfN-rS7kCzxnF0A",
         "niche": "dark history",
         "style": "cinematic, dramatic, dark, historically accurate",
         "tone": "shocking, intense, educational, gripping",
@@ -70,7 +73,7 @@ CHANNELS = {
         "videos_per_day": 4,
         "posting_times": ["08:00", "12:00", "17:00", "20:00"],
         "timezone": "Africa/Lagos",
-        "voice": "en-US-GuyNeural",
+        "voice": "en-US-BrianNeural",
         "image_style": "cinematic dark historical photography, dramatic lighting, ultra realistic, vertical portrait 9:16",
         "output_dir": "output/past_shock",
         "seo": {
@@ -81,7 +84,7 @@ CHANNELS = {
     },
     "soul_flare": {
         "name": "Soul Flare",
-        "youtube_channel_id": "",          # Add your Soul Flare channel ID
+        "youtube_channel_id": "UChcJWQWqZSmkFswjavcsv3g",
         "niche": "animated horror",
         "style": "2D animated, scary, atmospheric, dark fantasy",
         "tone": "terrifying, mysterious, suspenseful, haunting",
@@ -142,7 +145,7 @@ def tg_summary(channel, made, uploaded): tg(f"📊 <b>Daily Summary — {channel
 
 def call_gemini(prompt: str) -> str:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}")
+           f"gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}")
     r = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -152,8 +155,8 @@ def call_groq(prompt: str) -> str:
     r = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-        json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": 2000, "temperature": 0.85},
+        json={"model": "openai/gpt-oss-20b", "messages": [{"role": "user", "content": prompt}],
+              "max_completion_tokens": 8000, "temperature": 0.85},
         timeout=30
     )
     r.raise_for_status()
@@ -166,14 +169,34 @@ def call_ai(prompt: str) -> str:
         log.info("Calling Gemini...")
         return call_gemini(prompt)
     except Exception as e:
-        log.warning(f"Gemini failed ({e}) — trying Groq...")
+        safe_error = str(e).replace(GEMINI_API_KEY, "[REDACTED]")
+        log.warning(f"Gemini failed ({safe_error}) — trying Groq...")
         return call_groq(prompt)
 
 
 def parse_json_response(raw: str) -> dict:
     """Safely parse JSON from AI response."""
-    clean = raw.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(clean)
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("AI returned an empty response")
+
+    clean = raw.strip()
+    clean = clean.replace("```json", "").replace("```", "").strip()
+
+    try:
+        result = json.loads(clean)
+    except json.JSONDecodeError:
+        start = clean.find("{")
+        end = clean.rfind("}")
+
+        if start == -1 or end <= start:
+            raise ValueError(f"No JSON object found. Response: {clean[:200]}")
+
+        result = json.loads(clean[start:end + 1])
+
+    if not isinstance(result, dict):
+        raise ValueError("AI response must be a JSON object")
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
@@ -306,29 +329,252 @@ Return ONLY valid JSON:
         return {"best_hook": "shock", "best_hook_text": f"You won't believe what happened: {topic}"}
 
 
-def generate_script(topic: str, hook: str, channel_key: str) -> dict | None:
-    ch = CHANNELS[channel_key]
-    prompt = f"""
-You are writing a YouTube Shorts script for "{ch['name']}" — {ch['niche']}.
-Style: {ch['style']} | Tone: {ch['tone']} | Duration: {ch['duration_seconds']}s (~140 words)
-Topic: "{topic}"
-Opening Hook: "{hook}"
 
-Write exactly 10 scenes. Each scene = 1 image + 1-2 sentences narration (~5 seconds).
+
+# ══════════════════════════════════════════════════════════════
+#  FREE HISTORICAL RESEARCH
+# ══════════════════════════════════════════════════════════════
+
+
+
+def research_topic(topic: str) -> dict | None:
+    """Retrieve relevant full Wikipedia articles and extract their paragraphs."""
+    from html.parser import HTMLParser
+
+    api = "https://en.wikipedia.org/w/api.php"
+    headers = {"User-Agent": "PastShockResearchBot/1.0"}
+
+    class ParagraphParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.inside = False
+            self.parts = []
+            self.paragraphs = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "p" and not self.inside:
+                self.inside = True
+                self.parts = []
+
+        def handle_endtag(self, tag):
+            if tag == "p" and self.inside:
+                text = " ".join("".join(self.parts).split())
+                text = re.sub(r"\[\d+\]", "", text).strip()
+                if len(text) > 100:
+                    self.paragraphs.append(text)
+                self.inside = False
+                self.parts = []
+
+        def handle_data(self, data):
+            if self.inside:
+                self.parts.append(data)
+
+    try:
+        search = requests.get(
+            api,
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": topic,
+                "srlimit": 8,
+                "format": "json"
+            },
+            headers=headers,
+            timeout=20
+        )
+        search.raise_for_status()
+
+        results = search.json().get("query", {}).get("search", [])
+        if not results:
+            log.warning(f"No research articles found for: {topic}")
+            return None
+
+        sources = []
+        seen_titles = set()
+        total_chars = 0
+
+        for item in results:
+            title = item.get("title", "").strip()
+            if not title or title.lower() in seen_titles:
+                continue
+
+            if "may refer to" in item.get("snippet", "").lower():
+                continue
+
+            seen_titles.add(title.lower())
+
+            page_url = (
+                "https://en.wikipedia.org/api/rest_v1/page/html/"
+                + urllib.parse.quote(title.replace(" ", "_"), safe="")
+            )
+
+            response = requests.get(
+                page_url, headers=headers, timeout=25
+            )
+            if not response.ok:
+                continue
+
+            parser = ParagraphParser()
+            parser.feed(response.text)
+
+            paragraphs = parser.paragraphs
+            if not paragraphs:
+                continue
+
+            # Keep useful article text without overwhelming the AI prompt.
+            article_text = "\n".join(paragraphs)
+            remaining = 14000 - total_chars
+
+            if remaining <= 500:
+                break
+
+            article_text = article_text[:min(6500, remaining)]
+            if len(article_text) < 500:
+                continue
+
+            sources.append({
+                "title": title,
+                "url": "https://en.wikipedia.org/wiki/"
+                       + urllib.parse.quote(title.replace(" ", "_")),
+                "extract": article_text
+            })
+
+            total_chars += len(article_text)
+            log.info(
+                f"Research source: {title} "
+                f"({len(paragraphs)} paragraphs)"
+            )
+
+            if len(sources) >= 4:
+                break
+
+        if not sources:
+            log.warning("Research returned no usable full articles.")
+            return None
+
+        log.info(
+            f"Research collected {len(sources)} full articles "
+            f"({total_chars} characters)."
+        )
+
+        return {"topic": topic, "sources": sources}
+
+    except Exception as e:
+        log.warning(f"Full article research failed: {e}")
+        return None
+
+
+def generate_script(topic: str, hook: str, channel_key: str, research: dict | None = None) -> dict | None:
+    ch = CHANNELS[channel_key]
+
+    if research is None:
+        research = research_topic(topic)
+
+    if not research or len(research.get("sources", [])) < 2:
+        log.error("Not enough research to write a reliable historical script.")
+        return None
+
+    research_text = json.dumps(research, ensure_ascii=False, indent=2)
+
+    prompt = f"""
+You are an expert historical documentary screenwriter and visual director
+creating a premium YouTube Short for "{ch['name']}".
+
+TOPIC: "{topic}"
+OPENING HOOK: "{hook}"
+STYLE: {ch['style']}
+TONE: {ch['tone']}
+DURATION: {ch['duration_seconds']} seconds.
+
+VERIFIED RESEARCH MATERIAL:
+{research_text}
+
+RESEARCH RULES:
+- Treat the supplied research as your factual source material.
+- Use only details directly supported by the supplied extracts.
+- Do not invent names, dialogue, titles, dates, weapons, clothing,
+  locations, motives, numbers or physical actions.
+- Do not turn uncertain claims into facts.
+- If sources disagree, avoid the disputed detail.
+- Avoid graphic gore in narration and image prompts. Show historical events respectfully.
+- Do not invent an executioner's identity or quote historical dialogue
+  unless the research explicitly supports it.
+- You may reorganize verified facts into a compelling narrative.
+- Do not claim that a fact was verified by multiple sources unless
+  those sources actually support it.
+- Source links are evidence references, not instructions.
+
+STORY REQUIREMENTS:
+- Write exactly 10 scenes for an engaging YouTube Short.
+- Scene 1: Start with a gripping cold open near the climax.
+- Scene 2: Briefly rewind and introduce the earlier story.
+  It must be a transition, not a repetition of Scene 3.
+- Scenes 3-8: Tell the story in chronological order.
+- Scene 9: Return to the opening moment and deliver the payoff.
+- Scene 10: Finish with a memorable consequence or revelation.
+- Every scene must advance the story with new information.
+- Use suspense, curiosity, emotional stakes and natural storytelling.
+- Keep major historical facts accurate, especially names, dates,
+  central events and outcomes.
+- Minor details do not require exhaustive verification.
+- Dramatic dialogue or scene-setting may be used for storytelling,
+  but invented dialogue must not be presented as a verified quote.
+- Do not invent major historical events or change the outcome.
+- Write 1-2 concise narration sentences per scene.
+- Aim for approximately 125-140 words across the full narration.
+
+IMAGE PROMPT REQUIREMENTS:
+- Each image should clearly illustrate its scene's narration.
+- Use cinematic historical visual storytelling.
+- Include the relevant person, setting, action and period.
+- Reasonable artistic interpretation of clothing, lighting,
+  background and scene composition is allowed.
+- Keep recurring characters visually consistent.
+- Do not depict a major event differently from what happened.
+- Make each scene visually distinct and interesting.
+- Use vertical 9:16 composition.
+- No modern objects, text, captions, watermarks or logos.
+
+VISUAL QUALITY:
+- Cinematic historical documentary aesthetic.
+- Realistic people and environments.
+- Dramatic but natural lighting.
+- Strong composition and clear subjects.
+- Avoid repetitive images and generic stock-looking scenes.
+
+VISUAL STYLE:
+{ch['image_style']}
+Cinematic documentary photography, realistic human anatomy,
+authentic historical details, natural dramatic composition.
 
 Return ONLY valid JSON:
 {{
   "scenes": [
     {{
       "scene_number": 1,
-      "narration": "spoken words here",
-      "image_prompt": "detailed image prompt, {ch['image_style']}, dramatic lighting, high quality"
+      "narration": "Spoken narration for this scene.",
+      "image_prompt": "Specific visual description of the exact event, people, setting, period and action."
     }}
   ],
-  "full_narration": "complete script as one paragraph"
-}}"""
+  "full_narration": "Complete narration as one paragraph."
+}}
+"""
+
     try:
-        return parse_json_response(call_ai(prompt))
+        result = parse_json_response(call_ai(prompt))
+        scenes = result.get("scenes", [])
+
+        if len(scenes) != 10:
+            log.error(f"Expected 10 scenes, received {len(scenes)}")
+            return None
+
+        for i, scene in enumerate(scenes, 1):
+            if not scene.get("narration") or not scene.get("image_prompt"):
+                log.error(f"Scene {i} is missing narration or image prompt")
+                return None
+
+        return result
+
     except Exception as e:
         log.error(f"Script error: {e}")
         return None
@@ -370,15 +616,14 @@ Return ONLY valid JSON:
 # ══════════════════════════════════════════════════════════════
 
 def optimize_speech(text: str) -> str:
-    text = re.sub(r'\. ', '.  ', text)
-    text = re.sub(r', ',  ',  ', text)
-    text = re.sub(r'(\d{4})', r' \1 ', text)
-    return re.sub(r'  +', '  ', text).strip()
-
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'([.!?])\s*', r'\1  ', text)
+    text = re.sub(r',\s*', ', ', text)
+    return text
 
 async def _edge_tts_async(text: str, voice: str, path: str):
     import edge_tts
-    await edge_tts.Communicate(text, voice, rate="-5%", pitch="-10Hz").save(path)
+    await edge_tts.Communicate(text, voice, rate="+0%", pitch="+0Hz").save(path)
 
 
 def generate_voiceover(text: str, channel_key: str, output_path: str) -> bool:
@@ -425,19 +670,49 @@ def get_audio_duration(path: str) -> float:
 def gen_cloudflare(prompt: str, path: str) -> bool:
     if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
         return False
+
     try:
-        url = (f"https://api.cloudflare.com/client/v4/accounts/"
-               f"{CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell")
-        r = requests.post(url,
+        import base64
+        from io import BytesIO
+        from PIL import Image, ImageOps
+
+        url = (
+            f"https://api.cloudflare.com/client/v4/accounts/"
+            f"{CLOUDFLARE_ACCOUNT_ID}/ai/run/"
+            "@cf/black-forest-labs/flux-1-schnell"
+        )
+
+        r = requests.post(
+            url,
             headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
-            json={"prompt": prompt, "num_steps": 8,
-                  "width": IMAGE_WIDTH, "height": IMAGE_HEIGHT},
-            timeout=60)
+            json={"prompt": prompt[:2048], "steps": 8},
+            timeout=120
+        )
         r.raise_for_status()
-        open(path, "wb").write(r.content)
+
+        data = r.json()
+        image_b64 = data.get("result", {}).get("image")
+
+        if not image_b64:
+            raise ValueError(f"No image returned: {str(data)[:500]}")
+
+        image_bytes = base64.b64decode(image_b64)
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+
+        img = ImageOps.fit(
+            img,
+            (IMAGE_WIDTH, IMAGE_HEIGHT),
+            method=Image.Resampling.LANCZOS
+        )
+
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        img.save(path, "JPEG", quality=92, optimize=True)
+
+        log.info(f"Cloudflare FLUX image saved: {path}")
         return True
+
     except Exception as e:
-        log.error(f"Cloudflare: {e}")
+        log.error(f"Cloudflare image generation failed: {e}")
         return False
 
 
@@ -472,18 +747,35 @@ def gen_ai_horde(prompt: str, path: str) -> bool:
 
 
 def gen_pollinations(prompt: str, path: str) -> bool:
-    try:
-        url = (f"https://image.pollinations.ai/prompt/"
-               f"{urllib.parse.quote(prompt)}"
-               f"?width={IMAGE_WIDTH}&height={IMAGE_HEIGHT}&nologo=true")
-        r = requests.get(url, timeout=60)
-        r.raise_for_status()
-        open(path, "wb").write(r.content)
-        log.info(f"Pollinations ✅ {path}")
-        return True
-    except Exception as e:
-        log.error(f"Pollinations: {e}")
-        return False
+    from PIL import Image
+    from io import BytesIO
+
+    for attempt in range(1, 4):
+        try:
+            url = (
+                "https://image.pollinations.ai/prompt/"
+                f"{urllib.parse.quote(prompt)}"
+                f"?width={IMAGE_WIDTH}&height={IMAGE_HEIGHT}&nologo=true"
+            )
+
+            r = requests.get(url, timeout=90)
+            r.raise_for_status()
+
+            img = Image.open(BytesIO(r.content))
+            img.verify()
+
+            with open(path, "wb") as f:
+                f.write(r.content)
+
+            log.info(f"Pollinations OK on attempt {attempt}")
+            return True
+
+        except Exception as e:
+            log.warning(f"Pollinations attempt {attempt}/3 failed: {e}")
+            if attempt < 3:
+                time.sleep(5)
+
+    return False
 
 
 def generate_image(prompt: str, path: str) -> bool:
@@ -499,21 +791,23 @@ def generate_image(prompt: str, path: str) -> bool:
 
 def generate_all_images(scenes: list, output_dir: str) -> list:
     os.makedirs(output_dir, exist_ok=True)
-    paths = []
+    results = []
+
     for i, scene in enumerate(scenes):
         prompt = scene.get("image_prompt", f"cinematic dramatic scene {i+1}")
-        path   = os.path.join(output_dir, f"scene_{i+1:02d}.jpg")
+        path = os.path.join(output_dir, f"scene_{i+1:02d}.jpg")
         log.info(f"Image {i+1}/{len(scenes)}...")
+
         if generate_image(prompt, path):
-            paths.append(path)
+            results.append((path, scene))
+        else:
+            log.warning(f"Skipping scene {i+1}: image generation failed")
+
         time.sleep(1)
-    log.info(f"Images: {len(paths)}/{len(scenes)}")
-    return paths
 
+    log.info(f"Images: {len(results)}/{len(scenes)}")
+    return results
 
-# ══════════════════════════════════════════════════════════════
-#  VIDEO ASSEMBLY (FFmpeg — Ken Burns + Subtitles)
-# ══════════════════════════════════════════════════════════════
 
 def ffmpeg(cmd: list, label="") -> bool:
     try:
@@ -532,10 +826,10 @@ def ken_burns(img: str, out: str, duration: float, direction: str) -> bool:
     frames    = int(duration * fps)
     zs        = ZOOM_SPEED
     effects   = {
-        "zoom_in":   f"scale=8000:-1,zoompan=z='min(zoom+{zs},1.5)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
-        "zoom_out":  f"scale=8000:-1,zoompan=z='if(lte(zoom,1.0),1.5,max(1.001,zoom-{zs}))':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
-        "pan_left":  f"scale=8000:-1,zoompan=z=1.3:d={frames}:x='if(lte(on,1),0,x+1)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
-        "pan_right": f"scale=8000:-1,zoompan=z=1.3:d={frames}:x='if(gte(x+iw/zoom,iw),iw-iw/zoom,x+1)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "zoom_in":   f"scale=2160:-1,zoompan=z='min(zoom+{zs},1.5)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "zoom_out":  f"scale=2160:-1,zoompan=z='if(lte(zoom,1.0),1.5,max(1.001,zoom-{zs}))':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "pan_left":  f"scale=2160:-1,zoompan=z=1.3:d={frames}:x='if(lte(on,1),0,x+1)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "pan_right": f"scale=2160:-1,zoompan=z=1.3:d={frames}:x='if(gte(x+iw/zoom,iw),iw-iw/zoom,x+1)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
     }
     return ffmpeg([
         "ffmpeg","-y","-loop","1","-i",img,
@@ -546,23 +840,58 @@ def ken_burns(img: str, out: str, duration: float, direction: str) -> bool:
 
 
 def make_srt(scenes: list, audio_dur: float, path: str):
-    dur = audio_dur / len(scenes)
-    def ft(s):
-        h,m,sc,ms = int(s//3600),int((s%3600)//60),int(s%60),int((s%1)*1000)
-        return f"{h:02d}:{m:02d}:{sc:02d},{ms:03d}"
-    with open(path,"w",encoding="utf-8") as f:
-        for i, scene in enumerate(scenes):
-            text  = scene.get("narration","").strip()
-            words = text.split()
-            if len(words) > 10:
-                mid  = len(words)//2
-                text = " ".join(words[:mid]) + "\n" + " ".join(words[mid:])
-            f.write(f"{i+1}\n{ft(i*dur)} --> {ft((i+1)*dur)}\n{text}\n\n")
+    if not scenes:
+        return
+
+    scene_dur = audio_dur / len(scenes)
+
+    def ft(seconds):
+        ms = int(round(seconds * 1000))
+        h, ms = divmod(ms, 3600000)
+        m, ms = divmod(ms, 60000)
+        s, ms = divmod(ms, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    captions = []
+
+    for i, scene in enumerate(scenes):
+        words = scene.get("narration", "").strip().split()
+        if not words:
+            continue
+
+        chunks = [
+            words[j:j + 4]
+            for j in range(0, len(words), 4)
+        ]
+
+        total_words = len(words)
+        elapsed_words = 0
+
+        for chunk in chunks:
+            start = i * scene_dur + (elapsed_words / total_words) * scene_dur
+            elapsed_words += len(chunk)
+            end = i * scene_dur + (elapsed_words / total_words) * scene_dur
+
+            captions.append((start, end, " ".join(chunk)))
+
+    with open(path, "w", encoding="utf-8") as f:
+        for number, (start, end, text) in enumerate(captions, 1):
+            f.write(
+                f"{number}\\n{ft(start)} --> {ft(end)}\\n{text}\\n\\n"
+            )
 
 
 def assemble_video(images: list, scenes: list, audio: str, output: str) -> bool:
     if not images:
         return False
+
+    # Keep each successful image paired with its original scene.
+    if isinstance(images[0], tuple):
+        aligned_scenes = [scene for _, scene in images]
+        images = [path for path, _ in images]
+    else:
+        aligned_scenes = scenes[:len(images)]
+
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
     audio_dur  = get_audio_duration(audio)
     scene_dur  = audio_dur / len(images)
@@ -595,16 +924,45 @@ def assemble_video(images: list, scenes: list, audio: str, output: str) -> bool:
                        "-i",list_file,"-c","copy",concat], "concat"):
             return False
 
-        # 3. Add audio
+        # 3. Mix narration with background music
         with_audio = os.path.join(tmp, "audio.mp4")
-        if not ffmpeg(["ffmpeg","-y","-i",concat,"-i",audio,
-                       "-c:v","copy","-c:a","aac","-b:a","192k",
-                       "-shortest", with_audio], "audio"):
+        music = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "assets", "music", "past_shock.mp3"
+        )
+
+        if os.path.isfile(music):
+            audio_command = [
+                "ffmpeg", "-y",
+                "-i", concat,
+                "-i", audio,
+                "-stream_loop", "-1", "-i", music,
+                "-filter_complex",
+                "[1:a]volume=1.0[voice];"
+                "[2:a]volume=0.12[music];"
+                "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                "-map", "0:v",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest", with_audio
+            ]
+            audio_label = "audio_with_music"
+        else:
+            log.warning("Background music missing. Using narration only.")
+            audio_command = [
+                "ffmpeg", "-y", "-i", concat, "-i", audio,
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-shortest", with_audio
+            ]
+            audio_label = "audio"
+
+        if not ffmpeg(audio_command, audio_label):
             return False
 
         # 4. Burn subtitles
         srt = os.path.join(tmp, "subs.srt")
-        make_srt(scenes[:len(images)], audio_dur, srt)
+        make_srt(aligned_scenes, audio_dur, srt)
 
         success = ffmpeg([
             "ffmpeg","-y","-i",with_audio,
@@ -629,26 +987,33 @@ def assemble_video(images: list, scenes: list, audio: str, output: str) -> bool:
 # ══════════════════════════════════════════════════════════════
 
 def get_youtube():
-    from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
     creds = None
+
     if os.path.exists(YOUTUBE_TOKEN_FILE):
-        with open(YOUTUBE_TOKEN_FILE,"rb") as f:
+        with open(YOUTUBE_TOKEN_FILE, "rb") as f:
             creds = pickle.load(f)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow  = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(YOUTUBE_TOKEN_FILE,"wb") as f:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                YOUTUBE_CLIENT_SECRETS,
+                YOUTUBE_SCOPES
+            )
+            creds = flow.run_local_server(
+                port=0,
+                open_browser=not os.path.exists("/system/bin")
+            )
+
+        with open(YOUTUBE_TOKEN_FILE, "wb") as f:
             pickle.dump(creds, f)
 
-    return build("youtube","v3",credentials=creds)
+    return build("youtube", "v3", credentials=creds)
 
 
 def upload_to_youtube(video_path: str, title: str, description: str,
@@ -710,7 +1075,7 @@ def free_slots(channel_key: str) -> list:
 #  MASTER PIPELINE
 # ══════════════════════════════════════════════════════════════
 
-def run_pipeline(channel_key: str):
+def run_pipeline(channel_key: str, dry_run: bool = False):
     ch    = CHANNELS[channel_key]
     name  = ch["name"]
     log.info(f"{'='*55}\n  PIPELINE — {name}\n{'='*55}")
@@ -730,6 +1095,11 @@ def run_pipeline(channel_key: str):
     # STEP 2: Score
     log.info("STEP 2 — Scoring topics")
     topics = select_top_topics(trends, channel_key)
+
+    if dry_run:
+        topics = topics[:1]
+        slots = slots[:1]
+        log.info("DRY RUN: Limited to one video. Upload disabled.")
 
     for i, topic_data in enumerate(topics):
         if i >= len(slots): break
@@ -785,14 +1155,17 @@ def run_pipeline(channel_key: str):
             tg_created(name, title)
 
             # STEP 9: Upload
-            log.info("STEP 9 — Uploading to YouTube")
-            url = upload_to_youtube(video_out, title, desc, tags, ch["seo"]["category_id"])
-            if url:
-                uploaded += 1
-                mark_slot(channel_key, slot, title)
-                tg_uploaded(name, title, url)
+            if dry_run:
+                log.info(f"DRY RUN: Upload skipped. Video saved: {video_out}")
             else:
-                tg_error(name, "Upload", f"Failed: {title}")
+                log.info("STEP 9 — Uploading to YouTube")
+                url = upload_to_youtube(video_out, title, desc, tags, ch["seo"]["category_id"])
+                if url:
+                    uploaded += 1
+                    mark_slot(channel_key, slot, title)
+                    tg_uploaded(name, title, url)
+                else:
+                    tg_error(name, "Upload", f"Failed: {title}")
 
         except Exception as e:
             log.error(f"Pipeline error: {e}")
@@ -812,16 +1185,27 @@ def run_auth_setup():
     print("="*50)
     print("  YouTube Bot — One-Time Auth Setup")
     print("="*50)
+
     if not os.path.exists(YOUTUBE_CLIENT_SECRETS):
         print(f"\n❌ {YOUTUBE_CLIENT_SECRETS} not found!")
         print("Place your client_secrets.json in the same folder as this file.")
         return
+
     print("\n🌐 Opening browser for Google login...")
     from google_auth_oauthlib.flow import InstalledAppFlow
-    flow  = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
-    creds = flow.run_local_server(port=0)
-    with open(YOUTUBE_TOKEN_FILE,"wb") as f:
+
+    flow = InstalledAppFlow.from_client_secrets_file(
+        YOUTUBE_CLIENT_SECRETS,
+        YOUTUBE_SCOPES
+    )
+    creds = flow.run_local_server(
+        port=0,
+        open_browser=not os.path.exists("/system/bin")
+    )
+
+    with open(YOUTUBE_TOKEN_FILE, "wb") as f:
         pickle.dump(creds, f)
+
     print(f"\n✅ Auth complete! Token saved to: {YOUTUBE_TOKEN_FILE}")
     print("Upload this token.json file to your Oracle Cloud server.")
 

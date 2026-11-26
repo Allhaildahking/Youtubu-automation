@@ -1,0 +1,30 @@
+# Credentials
+client_secrets.json
+token.json
+.env
+
+# Generated files
+output/
+__pycache__/
+*.py[cod]
+
+# Logs: keep scheduler state synced
+logs/*
+!logs/schedule.json
+
+# Local backups
+*.bak
+*.bak*
+*.before_*
+
+# Local test files
+*_test.*
+pollinations_test.jpg
+video_test.mp4
+voice_test.mp3
+
+# Temporary patch scripts
+fix_research.py
+patch_research.py
+patch_story_structure.py
+upgrade_research.py
